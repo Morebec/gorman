@@ -12,15 +12,64 @@ import (
 
 const GoroutineNotFoundErrorCode = "goroutine_not_found"
 
-type Manager struct {
-	goroutines map[string]*Goroutine
-	mu         sync.Mutex
-	cancelFunc context.CancelFunc
-	logger     *slog.Logger
-}
-
 type Options struct {
 	Logger *slog.Logger
+}
+
+// RestartPolicy is an interface responsible for deciding whether a Goroutine should be restarted when its stops
+// from the Manager's point of view.
+type RestartPolicy interface {
+	// MustRestart indicates if a goroutine should be restarted according to this policy.
+	// This method will return true to indicate that the provided Goroutine should be restarted,
+	// otherwise it will return false.
+	// To apply a delay between restarts, one can simply make this function wait before returning the result.
+	MustRestart(g *Goroutine) bool
+}
+
+type RestartPolicyFunc func(g *Goroutine) bool
+
+func (r RestartPolicyFunc) MustRestart(g *Goroutine) bool {
+	return r(g)
+}
+
+// AlwaysRestart this policy indicates that a Goroutine should always be restarted.
+func AlwaysRestart() RestartPolicy {
+	return RestartPolicyFunc(func(g *Goroutine) bool {
+		return true
+	})
+}
+
+// NeverRestart returns a policy that indicates that a Goroutine should never be restarted.
+func NeverRestart() RestartPolicy {
+	return RestartPolicyFunc(func(g *Goroutine) bool {
+		return false
+	})
+}
+
+// RestartOnError returns a policy that indicates that a Goroutine should be restarted when an error occurred.
+func RestartOnError() RestartPolicy {
+	return RestartPolicyFunc(func(g *Goroutine) bool {
+		exec, _ := g.LastExecution()
+		return exec.Error != nil
+	})
+}
+
+// managedGoroutine is a decorator for Goroutine that allows specifying restart policies.
+type managedGoroutine struct {
+	Goroutine
+	restartPolicy RestartPolicy
+}
+
+func (g *managedGoroutine) mustRestart() bool {
+	return g.restartPolicy.MustRestart(&g.Goroutine)
+}
+
+type Manager struct {
+	goroutines   map[string]*managedGoroutine
+	mu           sync.Mutex
+	cancelFunc   context.CancelFunc
+	logger       *slog.Logger
+	shuttingDown bool
 }
 
 func NewManager(opts Options) *Manager {
@@ -31,21 +80,29 @@ func NewManager(opts Options) *Manager {
 	}
 
 	return &Manager{
-		goroutines: map[string]*Goroutine{},
+		goroutines: map[string]*managedGoroutine{},
 		logger:     opts.Logger,
 	}
 }
 
 // Add a Goroutine to this manager.
-func (m *Manager) Add(name string, f GoroutineFunc) {
+func (m *Manager) Add(name string, f GoroutineFunc, rp RestartPolicy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.goroutines == nil {
-		m.goroutines = map[string]*Goroutine{}
+		m.goroutines = map[string]*managedGoroutine{}
 	}
-	m.goroutines[name] = &Goroutine{
-		Name: name,
-		Func: f,
+
+	if rp == nil {
+		rp = NeverRestart()
+	}
+
+	m.goroutines[name] = &managedGoroutine{
+		Goroutine: Goroutine{
+			Name: name,
+			Func: f,
+		},
+		restartPolicy: rp,
 	}
 }
 
@@ -76,10 +133,16 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 				case GoroutineStoppedEvent:
 					e := evt.(GoroutineStoppedEvent)
 					if e.Error != nil {
-						m.logger.Info(fmt.Sprintf("%s encontered error %s", e.Name, e.Error.Error()))
+						m.logger.Error(fmt.Sprintf("%s encontered error %s", e.Name, e.Error.Error()))
 					}
 					m.logger.Info(fmt.Sprintf("%s stopped", e.Name))
 					gr.Unlisten(listener)
+					if !m.shuttingDown && gr.mustRestart() {
+						m.logger.Info(fmt.Sprintf("will restart %s ...", e.Name))
+						if err := m.Start(ctx, gr.Name); err != nil {
+							m.logger.Error(fmt.Sprintf("failed restarting %s, encontered error %s", e.Name, e.Error.Error()))
+						}
+					}
 				}
 
 			}
@@ -186,27 +249,31 @@ func (m *Manager) StopAll(wait bool) {
 	}
 }
 
-// Status returns the current state of all Goroutine managed by this manager.
-func (m *Manager) Status() map[string]GoroutineState {
+// Status returns the current executions of all Goroutine managed by this manager.
+func (m *Manager) Status() map[string]GoroutineExecution {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	states := map[string]GoroutineState{}
+	states := map[string]GoroutineExecution{}
 	for _, g := range m.goroutines {
-		states[g.Name] = g.State
+		exec, ok := g.LastExecution()
+		if !ok {
+			exec = GoroutineExecution{}
+		}
+		states[g.Name] = exec
 	}
 
 	return states
 }
 
 // StatusByName returns the status of a Goroutine by its name, or an error with code GoroutineNotFoundErrorCode.
-func (m *Manager) StatusByName(name string) (GoroutineState, error) {
-	gr, err := m.findGoroutineByName(name)
+func (m *Manager) StatusByName(name string) (GoroutineExecution, error) {
+	_, err := m.findGoroutineByName(name)
 	if err != nil {
-		return GoroutineState{}, err
+		return GoroutineExecution{}, err
 	}
 
-	return gr.State, nil
+	return m.Status()[name], nil
 }
 
 // Shutdown requests shutting down the manager and all its Goroutine.
@@ -215,10 +282,11 @@ func (m *Manager) Shutdown() {
 		return
 	}
 	m.cancelFunc()
+	m.shuttingDown = true
 }
 
 // returns a Goroutine by its name, or returns an error with code GoroutineNotFoundErrorCode.
-func (m *Manager) findGoroutineByName(name string) (*Goroutine, error) {
+func (m *Manager) findGoroutineByName(name string) (*managedGoroutine, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	gr, ok := m.goroutines[name]

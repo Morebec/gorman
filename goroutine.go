@@ -37,15 +37,32 @@ type Goroutine struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
-	State     GoroutineState
-	stateChan <-chan GoroutineEvent
-
 	mu        sync.Mutex
 	listeners []chan GoroutineEvent
+
+	executions []GoroutineExecution
 }
 
 func NewGoroutine(name string, Func GoroutineFunc) *Goroutine {
 	return &Goroutine{Name: name, Func: Func}
+}
+
+// LastExecution returns the last execution of the Goroutine. If this Goroutine is currently running, will return
+// the currently running execution.
+func (g *Goroutine) LastExecution() (GoroutineExecution, bool) {
+	nbExecutions := len(g.executions)
+	if nbExecutions == 0 {
+		return GoroutineExecution{}, false
+	}
+	return g.executions[nbExecutions-1], true
+}
+
+// FirstExecution returns the first execution of the Goroutine
+func (g *Goroutine) FirstExecution() (GoroutineExecution, bool) {
+	if len(g.executions) == 0 {
+		return GoroutineExecution{}, false
+	}
+	return g.executions[0], true
 }
 
 // Start executes a goroutine's function inside a goroutine. It does not wait for it to finish
@@ -56,12 +73,8 @@ func (g *Goroutine) Start(ctx context.Context) {
 	if g.Running() {
 		return
 	}
-	g.State.Name = g.Name
 
 	g.ctx, g.cancelFunc = context.WithCancel(ctx)
-	if g.stateChan == nil {
-		g.stateChan = g.Listen()
-	}
 
 	// Listen to parent context for cancellation signals.
 	go func() {
@@ -84,9 +97,13 @@ func (g *Goroutine) Start(ctx context.Context) {
 			Name:      g.Name,
 			StartedAt: startedAt,
 		})
-		g.State.StartedAt = &startedAt
-		g.State.Running = true
-		g.State.NbExecutions++
+
+		// Add execution
+		exec := GoroutineExecution{}
+		exec.StartedAt = &startedAt
+		exec.Running = true
+
+		g.executions = append(g.executions, exec)
 
 		// Execute function
 		err := g.Func(g.ctx)
@@ -99,11 +116,11 @@ func (g *Goroutine) Start(ctx context.Context) {
 			EndedAt:   endedAt,
 			Error:     err,
 		})
-		g.State.EndedAt = &endedAt
-		if err != nil {
-			g.State.Errors = append(g.State.Errors, err)
-		}
-		g.State.Running = false
+
+		// Update execution
+		exec.EndedAt = &endedAt
+		exec.Error = err
+		exec.Running = false
 
 		// cleanup
 		g.cancelFunc = nil
@@ -193,12 +210,10 @@ func (g *Goroutine) broadcastEvent(event GoroutineEvent) {
 // GoroutineFunc represents a function to be executed inside a goroutine.
 type GoroutineFunc func(ctx context.Context) error
 
-// GoroutineState represents the current state of a goroutine.
-type GoroutineState struct {
-	Name         string
-	Errors       []error
-	StartedAt    *time.Time
-	EndedAt      *time.Time
-	Running      bool
-	NbExecutions int
+// GoroutineExecution represents an execution of a Goroutine
+type GoroutineExecution struct {
+	StartedAt *time.Time
+	EndedAt   *time.Time
+	Error     error
+	Running   bool
 }

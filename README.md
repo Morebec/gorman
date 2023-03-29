@@ -45,8 +45,17 @@ man.Add("MyGoroutine", func(ctx context.Context) error {
 	case <-ctx.Done():
             return nil
     }
-})
+}, gorman.NeverRestart())
 ```
+
+The last parameter allows specifying the restart policy of the Goroutine.
+Out of the box the following Restart Policies are implemented:
+- `NeverRestart()`: Never restarts the Goroutine once it has stopped.
+- `AlwaysRestart()`: Always restarts the Goroutine.
+- `RestartOnError()`: Restart the Goroutine when it stops with an error.
+- `RestartPolicyFunc`: Allows specifying the restart logic using a function.
+
+See the `RestartPolicy` interface for more information.
 
 #### Running the Manager
 The `Run` method, allows running the manager and starting all the goroutines that were added to it:

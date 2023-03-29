@@ -22,7 +22,7 @@ func main() {
 	man.Add("go1", func(ctx context.Context) error {
 		time.Sleep(time.Second * 2)
 		return man.Stop("go2")
-	})
+	}, gorman.NeverRestart())
 
 	man.Add("go2", func(ctx context.Context) error {
 		select {
@@ -30,16 +30,15 @@ func main() {
 			time.Sleep(time.Second * 2)
 			return man.Stop("go3")
 		}
-	})
+	}, gorman.NeverRestart())
 
 	man.Add("go3", func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			time.Sleep(time.Second * 8)
-			man.Shutdown()
 			return nil
 		}
-	})
+	}, gorman.NeverRestart())
 
 	man.Run(context.Background())
 }
