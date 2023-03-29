@@ -13,7 +13,12 @@ import (
 // This example starts three goroutines, where go1 after two seconds stops go2, which in turn after two seconds,
 // will stop go3, which will finally shut down the manager and exist the program.
 func main() {
-	man := gorman.NewManager(slog.New(tint.NewHandler(os.Stderr)))
+	man := gorman.NewManager(gorman.Options{
+		Logger: slog.New(tint.Options{
+			Level:      slog.LevelDebug,
+			TimeFormat: time.TimeOnly,
+		}.NewHandler(os.Stdout)),
+	})
 	man.Add("go1", func(ctx context.Context) error {
 		time.Sleep(time.Second * 2)
 		return man.Stop("go2")

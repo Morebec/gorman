@@ -1,13 +1,12 @@
 package gorman
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/morebec/go-errors/errors"
 	"golang.org/x/exp/slog"
-	"os"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -20,15 +19,20 @@ type Manager struct {
 	logger     *slog.Logger
 }
 
-func NewManager(logger *slog.Logger) *Manager {
+type Options struct {
+	Logger *slog.Logger
+}
 
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.NewFile(uintptr(syscall.Stderr), os.DevNull)))
+func NewManager(opts Options) *Manager {
+
+	if opts.Logger == nil {
+		void := &bytes.Buffer{}
+		opts.Logger = slog.New(slog.NewTextHandler(void))
 	}
 
 	return &Manager{
 		goroutines: map[string]*Goroutine{},
-		logger:     logger,
+		logger:     opts.Logger,
 	}
 }
 

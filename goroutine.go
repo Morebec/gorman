@@ -44,6 +44,10 @@ type Goroutine struct {
 	listeners []chan GoroutineEvent
 }
 
+func NewGoroutine(name string, Func GoroutineFunc) *Goroutine {
+	return &Goroutine{Name: name, Func: Func}
+}
+
 // Start executes a goroutine's function inside a goroutine. It does not wait for it to finish
 // before returning.
 // It allows passing a context that can be used for cancellation.
