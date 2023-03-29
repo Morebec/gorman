@@ -18,6 +18,8 @@ func TestGoroutine_Start(t *testing.T) {
 
 	g.Start(context.Background())
 	assert.True(t, g.Running())
+	time.Sleep(time.Millisecond * 10)
+	assert.Equal(t, 1, g.State.NbExecutions)
 }
 
 func TestGoroutine_Stop(t *testing.T) {
@@ -37,7 +39,8 @@ func TestGoroutine_Stop(t *testing.T) {
 	g.Start(context.Background())
 	assert.True(t, g.Running())
 
-	g.Stop()
+	err := g.Stop()
+	assert.NoError(t, err)
 
 	assert.False(t, g.Running())
 	assert.Empty(t, g.State.Errors)

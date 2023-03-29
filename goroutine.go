@@ -76,26 +76,6 @@ func (g *Goroutine) Start(ctx context.Context) {
 		}
 	}()
 
-	// Update State projection
-	go func() {
-		for g.Running() {
-			select {
-			case evt := <-g.stateChan:
-				switch evt.(type) {
-				case GoroutineStartedEvent:
-					e := evt.(GoroutineStartedEvent)
-					g.State.StartedAt = &e.StartedAt
-					g.State.Running = true
-				case GoroutineStoppedEvent:
-					e := evt.(GoroutineStoppedEvent)
-					g.State.EndedAt = &e.EndedAt
-					g.State.Errors = append(g.State.Errors, e.Error)
-					g.State.Running = false
-				}
-			}
-		}
-	}()
-
 	// Run the function.
 	go func() {
 		// Send start event
@@ -104,17 +84,27 @@ func (g *Goroutine) Start(ctx context.Context) {
 			Name:      g.Name,
 			StartedAt: startedAt,
 		})
+		g.State.StartedAt = &startedAt
+		g.State.Running = true
+		g.State.NbExecutions++
 
 		// Execute function
 		err := g.Func(g.ctx)
 
 		// Send stopped event
+		endedAt := time.Now()
 		g.broadcastEvent(GoroutineStoppedEvent{
 			Name:      g.Name,
 			StartedAt: startedAt,
-			EndedAt:   time.Now(),
+			EndedAt:   endedAt,
 			Error:     err,
 		})
+		g.State.EndedAt = &endedAt
+		if err != nil {
+			g.State.Errors = append(g.State.Errors, err)
+		}
+		g.State.Running = false
+
 		// cleanup
 		g.cancelFunc = nil
 		g.ctx = nil
@@ -205,13 +195,10 @@ type GoroutineFunc func(ctx context.Context) error
 
 // GoroutineState represents the current state of a goroutine.
 type GoroutineState struct {
-	Name      string
-	Errors    []error
-	StartedAt *time.Time
-	EndedAt   *time.Time
-	Running   bool
+	Name         string
+	Errors       []error
+	StartedAt    *time.Time
+	EndedAt      *time.Time
+	Running      bool
+	NbExecutions int
 }
-
-// TODO: Allow STOP AND WAIT TO SUPPORT DEADLINES/TIMEOUTS
-// TODO: ADD slog to manager usng tint.
-// TODO: ADD SERVER AND CLIENT + CLI.
