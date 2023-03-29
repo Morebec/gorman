@@ -120,7 +120,7 @@ func (g *Goroutine) Start(ctx context.Context) {
 // Stop requests for the goroutine to stop, by calling its internal cancellation function from its start context.
 // waits until the goroutine is stopped.
 func (g *Goroutine) Stop() error {
-	if !g.Running() {
+	if g.cancelFunc == nil {
 		return nil
 	}
 	listen := g.Listen()
@@ -192,6 +192,7 @@ func (g *Goroutine) broadcastEvent(event GoroutineEvent) {
 		go func() {
 			l <- event
 		}()
+
 	}
 }
 
@@ -206,3 +207,7 @@ type GoroutineState struct {
 	EndedAt   *time.Time
 	Running   bool
 }
+
+// TODO: Allow STOP AND WAIT TO SUPPORT DEADLINES/TIMEOUTS
+// TODO: ADD slog to manager usng tint.
+// TODO: ADD SERVER AND CLIENT + CLI.

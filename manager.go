@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/morebec/go-errors/errors"
-	"log"
+	"golang.org/x/exp/slog"
+	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -13,17 +15,20 @@ const GoroutineNotFoundErrorCode = "goroutine_not_found"
 
 type Manager struct {
 	goroutines map[string]*Goroutine
-
-	eventChan chan GoroutineEvent
-
 	mu         sync.Mutex
 	cancelFunc context.CancelFunc
+	logger     *slog.Logger
 }
 
-func NewManager() *Manager {
+func NewManager(logger *slog.Logger) *Manager {
+
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.NewFile(uintptr(syscall.Stderr), os.DevNull)))
+	}
+
 	return &Manager{
 		goroutines: map[string]*Goroutine{},
-		eventChan:  make(chan GoroutineEvent, 20),
+		logger:     logger,
 	}
 }
 
@@ -48,21 +53,47 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 		return err
 	}
 
+	if gr.Running() {
+		return nil
+	}
+
+	m.logger.Info(fmt.Sprintf("starting %s...", name))
+
+	listener := gr.Listen()
 	gr.Start(ctx)
 	go func() {
-		eventChan := gr.Listen()
-		// started
-		started := <-eventChan
-		startedEvt := started.(GoroutineStartedEvent)
-		log.Printf("%s started \n", startedEvt.Name)
+		for {
+			select {
+			case evt := <-listener:
+				switch evt.(type) {
+				case GoroutineStartedEvent:
+					e := evt.(GoroutineStartedEvent)
+					m.logger.Info(fmt.Sprintf("%s started", e.Name))
+				case GoroutineStoppedEvent:
+					e := evt.(GoroutineStoppedEvent)
+					if e.Error != nil {
+						m.logger.Info(fmt.Sprintf("%s encontered error %s", e.Name, e.Error.Error()))
+					}
+					m.logger.Info(fmt.Sprintf("%s stopped", e.Name))
+					gr.Unlisten(listener)
+				}
 
-		// stopped
-		stopped := <-eventChan
-		stoppedEvt := stopped.(GoroutineStoppedEvent)
-		if stoppedEvt.Error != nil {
-			log.Printf("%s encountered error %s \n", stoppedEvt.Name, stoppedEvt.Error)
+			}
 		}
-		log.Printf("%s stopped \n", stoppedEvt.Name)
+		//eventChan := gr.Listen()
+		//
+		//// started
+		//started := <-eventChan
+		//startedEvt := started.(GoroutineStartedEvent)
+		//log.Printf("%s started \n", startedEvt.Name)
+		//
+		//// stopped
+		//stopped := <-eventChan
+		//stoppedEvt := stopped.(GoroutineStoppedEvent)
+		//if stoppedEvt.Error != nil {
+		//	log.Printf("%s encountered error %s \n", stoppedEvt.Name, stoppedEvt.Error)
+		//}
+		//log.Printf("%s stopped \n", stoppedEvt.Name)
 	}()
 
 	return nil
@@ -74,13 +105,18 @@ func (m *Manager) Stop(name string) error {
 	if err != nil {
 		return err
 	}
-	gr.Stop()
-	return nil
+
+	if !gr.Running() {
+		return nil
+	}
+
+	m.logger.Info(fmt.Sprintf("stopping %s...", name))
+	return gr.Stop()
 }
 
 // Run the manager and all the registered Goroutine, until the manager is shutdown.
 func (m *Manager) Run(ctx context.Context) {
-	log.Printf("gorman started")
+	m.logger.Info("gorman started")
 
 	// Start Goroutines
 
@@ -94,6 +130,7 @@ func (m *Manager) Run(ctx context.Context) {
 	go func() {
 		select {
 		case <-ctx.Done():
+			m.logger.Info("shutting down gorman...")
 			// Perform shutdown
 			m.StopAll(true)
 			wg.Done()

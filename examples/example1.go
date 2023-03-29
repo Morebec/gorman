@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"github.com/lmittmann/tint"
 	"github.com/morebec/gorman"
+	"golang.org/x/exp/slog"
 	_ "net/http/pprof"
+	"os"
 	"time"
 )
 
 // This example starts three goroutines, where go1 after two seconds stops go2, which in turn after two seconds,
-// will stop go3, which will finally shutdown the manager and exist the program.
+// will stop go3, which will finally shut down the manager and exist the program.
 func main() {
-	man := gorman.NewManager()
+	man := gorman.NewManager(slog.New(tint.NewHandler(os.Stderr)))
 	man.Add("go1", func(ctx context.Context) error {
 		time.Sleep(time.Second * 2)
 		return man.Stop("go2")
@@ -27,7 +30,7 @@ func main() {
 	man.Add("go3", func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
-			time.Sleep(time.Second * 2)
+			time.Sleep(time.Second * 8)
 			man.Shutdown()
 			return nil
 		}
