@@ -2,9 +2,9 @@
 Gorman is a lightweight Go package for managing and monitoring the execution 
 of goroutines. 
 
-- It provides two core concepts:
-- `Goroutine`: Which is a struct wrapping a goroutine and allowing to control its execution using Start/Stop semantics.
-- `Manager`: Which allows controlling multiple `Goroutines` at once.
+It provides two core concepts:
+- `Goroutine`: Struct wrapping a goroutine and allowing to control its execution using Start/Stop semantics.
+- `Manager`: Allows controlling multiple `Goroutines` at once and managing their lifecycle as a group.
 
 The `Manager` can be helpful to create Goroutine supervisors with a HTTP or CLI implementation
 to start and stop specific Goroutines.
@@ -43,7 +43,7 @@ man.Add("MyGoroutine", func(ctx context.Context) error {
     // Goroutine logic goes here
 	select {
 	case <-ctx.Done():
-		return nil
+            return nil
     }
 })
 ```
@@ -69,6 +69,12 @@ if err != nil {
 > Note: For goroutines to be stoppable they should correctly listen to the ctx.Done() channel.
 > Go routines will also stop whenever they return.
 
+#### Starting a Goroutine
+It is possible to start a goroutine that was previously stopped using the `Start` method:
+
+```go
+err := man.Start(context.Background(), "mygoroutine")
+```
 
 #### Getting the current state of goroutines
 The manager exposes the Status method which returns a slice of `GoroutineState` 
@@ -104,7 +110,7 @@ g.Start(ctx)
 cancel()
 ```
 
-### LIstening to Goroutines
+### Listening to Goroutine events
 Goroutines have an internal broadcasting system that allows subscribers to listen to Goroutine events
 such as  `GoroutineStartedEvent` and `GoroutineEndedEvent`.
 
@@ -136,7 +142,7 @@ g.Unlisten(eventChan)
 ```
 
 This mechanism can be useful to react to a goroutine's execution. For instance
-the `Manager` uses this monitor the lifecycle of the Goroutines.
+the `Manager` uses this mechanism to monitor the lifecycle of the Goroutines.
 
 > Note: Every call to the Listen() method will return a new channel. When done with using the
 > channel, it should be released using the `Unlisten` method.
