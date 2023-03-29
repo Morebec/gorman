@@ -2,6 +2,7 @@ package gorman
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -37,9 +38,10 @@ type Goroutine struct {
 	cancelFunc context.CancelFunc
 
 	State     GoroutineState
-	stateChan chan GoroutineEvent
+	stateChan <-chan GoroutineEvent
 
-	eventChan chan GoroutineEvent
+	mu        sync.Mutex
+	listeners []chan GoroutineEvent
 }
 
 // Start executes a goroutine's function inside a goroutine. It does not wait for it to finish
@@ -53,8 +55,9 @@ func (g *Goroutine) Start(ctx context.Context) {
 	g.State.Name = g.Name
 
 	g.ctx, g.cancelFunc = context.WithCancel(ctx)
-	g.eventChan = make(chan GoroutineEvent, 2)
-	g.stateChan = make(chan GoroutineEvent, 2)
+	if g.stateChan == nil {
+		g.stateChan = g.Listen()
+	}
 
 	// Listen to parent context for cancellation signals.
 	go func() {
@@ -64,7 +67,7 @@ func (g *Goroutine) Start(ctx context.Context) {
 		}
 		select {
 		case <-done:
-			g.Stop()
+			_ = g.Stop()
 			return
 		}
 	}()
@@ -93,51 +96,60 @@ func (g *Goroutine) Start(ctx context.Context) {
 	go func() {
 		// Send start event
 		startedAt := time.Now()
-		startedEvent := GoroutineStartedEvent{
+		g.broadcastEvent(GoroutineStartedEvent{
 			Name:      g.Name,
 			StartedAt: startedAt,
-		}
-
-		g.stateChan <- startedEvent
-		g.eventChan <- startedEvent
+		})
 
 		// Execute function
 		err := g.Func(g.ctx)
 
 		// Send stopped event
-		stoppedEvent := GoroutineStoppedEvent{
+		g.broadcastEvent(GoroutineStoppedEvent{
 			Name:      g.Name,
 			StartedAt: startedAt,
 			EndedAt:   time.Now(),
 			Error:     err,
-		}
-		g.stateChan <- stoppedEvent
-		g.eventChan <- stoppedEvent
-
-		/// cleanup
-		close(g.eventChan)
-		close(g.stateChan)
+		})
+		// cleanup
 		g.cancelFunc = nil
 		g.ctx = nil
 	}()
 }
 
 // Stop requests for the goroutine to stop, by calling its internal cancellation function from its start context.
-func (g *Goroutine) Stop() {
-	if g.cancelFunc == nil {
-		return
+// waits until the goroutine is stopped.
+func (g *Goroutine) Stop() error {
+	if !g.Running() {
+		return nil
 	}
+	listen := g.Listen()
+	defer g.Unlisten(listen)
 	g.cancelFunc()
+
+	for evt := range listen {
+		switch evt.(type) {
+		case GoroutineStoppedEvent:
+			e := evt.(GoroutineStoppedEvent)
+			return e.Error
+		}
+	}
+
+	return nil
 }
 
 // Wait starts a goroutine and waits for it to be completed.
 func (g *Goroutine) Wait(ctx context.Context) error {
+	listen := g.Listen()
+	defer g.Unlisten(listen)
 	g.Start(ctx)
-	_, stopEvent := <-g.eventChan, <-g.eventChan
 
-	stop := stopEvent.(GoroutineStoppedEvent)
-	if stop.Error != nil {
-		return stop.Error
+	for evt := range listen {
+		switch evt.(type) {
+		case GoroutineStoppedEvent:
+			e := evt.(GoroutineStoppedEvent)
+			return e.Error
+		}
 	}
 
 	return nil
@@ -150,8 +162,37 @@ func (g *Goroutine) Running() bool {
 
 // Listen returns the internal event channel of this Goroutine that can be used to listen to
 // its execution events.
-func (g *Goroutine) Listen() chan GoroutineEvent {
-	return g.eventChan
+func (g *Goroutine) Listen() <-chan GoroutineEvent {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	l := make(chan GoroutineEvent, 8)
+	g.listeners = append(g.listeners, l)
+	return l
+}
+
+func (g *Goroutine) Unlisten(l <-chan GoroutineEvent) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var newListeners []chan GoroutineEvent
+	for _, li := range g.listeners {
+		if li != l {
+			newListeners = append(newListeners, li)
+		}
+	}
+	g.listeners = newListeners
+}
+
+func (g *Goroutine) broadcastEvent(event GoroutineEvent) {
+	g.mu.Lock()
+	listeners := g.listeners
+	g.mu.Unlock()
+
+	for _, l := range listeners {
+		l := l
+		go func() {
+			l <- event
+		}()
+	}
 }
 
 // GoroutineFunc represents a function to be executed inside a goroutine.

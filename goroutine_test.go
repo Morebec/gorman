@@ -39,10 +39,8 @@ func TestGoroutine_Stop(t *testing.T) {
 
 	g.Stop()
 
-	_, stop := <-g.Listen(), <-g.Listen()
-	stopEvent := stop.(GoroutineStoppedEvent)
 	assert.False(t, g.Running())
-	assert.NoError(t, stopEvent.Error)
+	assert.Empty(t, g.State.Errors)
 }
 
 func TestGoroutine_StopByCancellingContext(t *testing.T) {
@@ -63,12 +61,13 @@ func TestGoroutine_StopByCancellingContext(t *testing.T) {
 	g.Start(ctx)
 	assert.True(t, g.Running())
 
+	listen := g.Listen()
 	cancel()
+	<-listen
+	<-listen
 
-	_, stop := <-g.Listen(), <-g.Listen()
-	stopEvent := stop.(GoroutineStoppedEvent)
 	assert.False(t, g.Running())
-	assert.NoError(t, stopEvent.Error)
+	assert.Empty(t, g.State.Errors)
 }
 
 func TestGoroutine_Wait(t *testing.T) {
@@ -96,6 +95,7 @@ func TestGoroutine_Running(t *testing.T) {
 
 	g.Start(context.Background())
 	assert.True(t, g.Running())
-	g.Stop()
-	assert.True(t, g.Running())
+	err := g.Stop()
+	assert.Error(t, err)
+	assert.False(t, g.Running())
 }
