@@ -250,30 +250,26 @@ func (m *Manager) StopAll(wait bool) {
 }
 
 // Status returns the current executions of all Goroutine managed by this manager.
-func (m *Manager) Status() map[string]GoroutineExecution {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	states := map[string]GoroutineExecution{}
-	for _, g := range m.goroutines {
-		exec, ok := g.LastExecution()
-		if !ok {
-			exec = GoroutineExecution{}
-		}
-		states[g.Name] = exec
+func (m *Manager) Status() map[string]GoroutineStatus {
+	statuses := map[string]GoroutineStatus{}
+	for name := range m.goroutines {
+		status, _ := m.StatusByName(name)
+		statuses[name] = status
 	}
 
-	return states
+	return statuses
 }
 
 // StatusByName returns the status of a Goroutine by its name, or an error with code GoroutineNotFoundErrorCode.
-func (m *Manager) StatusByName(name string) (GoroutineExecution, error) {
-	_, err := m.findGoroutineByName(name)
+func (m *Manager) StatusByName(name string) (GoroutineStatus, error) {
+	gr, err := m.findGoroutineByName(name)
 	if err != nil {
-		return GoroutineExecution{}, err
+		return GoroutineStatus{}, err
 	}
-
-	return m.Status()[name], nil
+	return GoroutineStatus{
+		Name:       gr.Name,
+		Executions: gr.executions,
+	}, nil
 }
 
 // Shutdown requests shutting down the manager and all its Goroutine.
@@ -294,4 +290,37 @@ func (m *Manager) findGoroutineByName(name string) (*managedGoroutine, error) {
 		return nil, errors.NewWithMessage(GoroutineNotFoundErrorCode, fmt.Sprintf("no goroutine named %s", name))
 	}
 	return gr, nil
+}
+
+type GoroutineStatus struct {
+	Name       string
+	Executions []GoroutineExecution
+}
+
+// LastExecution returns the last execution of the Goroutine. If this Goroutine is currently running, will return
+// the currently running execution.
+func (g *GoroutineStatus) LastExecution() (GoroutineExecution, bool) {
+	nbExecutions := len(g.Executions)
+	if nbExecutions == 0 {
+		return GoroutineExecution{}, false
+	}
+	return g.Executions[nbExecutions-1], true
+}
+
+// FirstExecution returns the first execution of the Goroutine
+func (g *GoroutineStatus) FirstExecution() (GoroutineExecution, bool) {
+	if len(g.Executions) == 0 {
+		return GoroutineExecution{}, false
+	}
+	return g.Executions[0], true
+}
+
+// Running indicates if the Goroutine is currently running
+func (g *GoroutineStatus) Running() bool {
+	le, ok := g.LastExecution()
+	if !ok {
+		return false
+	}
+
+	return le.Running
 }
